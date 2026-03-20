@@ -3,7 +3,6 @@ import numpy as np
 
 st.set_page_config(page_title="Ти — нейромережа", page_icon="🧠", layout="centered")
 
-# --- data ---
 DATA = [
     {"f": [1, 1, 0], "label": "cat", "ua": "Кіт", "emoji": "🐱"},
     {"f": [0, 0, 1], "label": "dog", "ua": "Собака", "emoji": "🐶"},
@@ -22,7 +21,7 @@ def sigmoid(x: float) -> float:
     return 1.0 / (1.0 + np.exp(-x))
 
 
-def net_predict(features: list[int], weights: list[float], bias: float) -> float:
+def net_predict(features, weights, bias):
     s = bias + sum(f * w for f, w in zip(features, weights))
     return sigmoid(s)
 
@@ -34,76 +33,23 @@ def init_state():
     st.session_state.phase = "guess"
     st.session_state.user_score = 0
     st.session_state.net_score = 0
-    st.session_state.last_guess = None
     st.session_state.history = []
+    st.session_state.round_result = None
 
 
-if "phase" not in st.session_state:
-    init_state()
-
-w = st.session_state.weights
-b = st.session_state.bias
-rnd = st.session_state.round
-
-
-# --- helpers ---
-def show_weights():
-    cols = st.columns(3)
-    for i, col in enumerate(cols):
-        col.metric(FEATURES[i], f"{w[i]:.2f}")
-
-
-def show_features(d: dict):
-    tags = []
-    for i, name in enumerate(FEATURES):
-        if d["f"][i]:
-            tags.append(f"✅ {name}")
-        else:
-            tags.append(f"~~{name}~~")
-    st.markdown("&emsp;".join(tags))
-
-
-# --- screens ---
-if st.session_state.phase == "guess" and rnd < len(DATA):
+def do_guess(user_guess: str):
+    """Called once via on_click. Computes everything and updates state."""
+    rnd = st.session_state.round
     d = DATA[rnd]
+    w = list(st.session_state.weights)
+    b = st.session_state.bias
 
-    st.markdown("## 🧠 Ти — нейромережа")
-    st.caption(f"Раунд {rnd + 1} / {len(DATA)}")
-    st.progress((rnd) / len(DATA))
-
-    st.markdown("### Ознаки тварини:")
-    show_features(d)
-
-    st.markdown("---")
-    st.markdown("**Хто це?**")
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("🐱 Кіт", use_container_width=True):
-            st.session_state.last_guess = "cat"
-            st.session_state.phase = "result"
-            st.rerun()
-    with col2:
-        if st.button("🐶 Собака", use_container_width=True):
-            st.session_state.last_guess = "dog"
-            st.session_state.phase = "result"
-            st.rerun()
-
-    st.markdown("---")
-    st.markdown("**Поточні ваги мережі:**")
-    show_weights()
-
-
-elif st.session_state.phase == "result":
-    d = DATA[rnd]
-    guess = st.session_state.last_guess
-
-    # network prediction before update
     prob = net_predict(d["f"], w, b)
     net_guess = "cat" if prob > 0.5 else "dog"
     target = 1.0 if d["label"] == "cat" else 0.0
-    confidence = prob if d["label"] == "cat" else 1 - prob
+    confidence = prob if d["label"] == "cat" else 1.0 - prob
 
-    user_correct = guess == d["label"]
+    user_correct = user_guess == d["label"]
     net_correct = net_guess == d["label"]
 
     if user_correct:
@@ -111,9 +57,8 @@ elif st.session_state.phase == "result":
     if net_correct:
         st.session_state.net_score += 1
 
-    # update weights
     err = target - prob
-    grad = prob * (1 - prob)
+    grad = prob * (1.0 - prob)
     for i in range(3):
         st.session_state.weights[i] += LR * err * grad * d["f"][i]
     st.session_state.bias += LR * err * grad
@@ -128,42 +73,131 @@ elif st.session_state.phase == "result":
         }
     )
 
-    # display
+    st.session_state.round_result = {
+        "user_correct": user_correct,
+        "net_correct": net_correct,
+        "confidence": confidence,
+        "d": d,
+    }
+    st.session_state.phase = "result"
+
+
+def next_round():
+    st.session_state.round += 1
+    if st.session_state.round >= len(DATA):
+        st.session_state.phase = "done"
+    else:
+        st.session_state.phase = "guess"
+    st.session_state.round_result = None
+
+
+if "phase" not in st.session_state:
+    init_state()
+
+
+def show_weights():
+    cols = st.columns(3)
+    for i, col in enumerate(cols):
+        col.metric(FEATURES[i], f"{st.session_state.weights[i]:.2f}")
+
+
+def show_features(d: dict):
+    cols = st.columns(3)
+    for i, col in enumerate(cols):
+        if d["f"][i]:
+            col.markdown(
+                f'<div style="background:#1b4332;color:#95d5b2;padding:10px 14px;'
+                f'border-radius:8px;text-align:center;font-size:15px;">'
+                f"✅ {FEATURES[i]}</div>",
+                unsafe_allow_html=True,
+            )
+        else:
+            col.markdown(
+                f'<div style="background:#2b2b2b;color:#666;padding:10px 14px;'
+                f'border-radius:8px;text-align:center;font-size:15px;">'
+                f"❌ {FEATURES[i]}</div>",
+                unsafe_allow_html=True,
+            )
+
+
+# ── GUESS ──
+if st.session_state.phase == "guess":
+    rnd = st.session_state.round
+    d = DATA[rnd]
+
+    st.markdown("## 🧠 Ти — нейромережа")
+    st.caption(f"Раунд {rnd + 1} / {len(DATA)}")
+    st.progress(rnd / len(DATA))
+
+    if rnd == 0:
+        st.markdown(
+            "**Як грати:** бачиш набір ознак тварини, вгадуєш — кіт чи собака. "
+            "Паралельно вгадує проста нейромережа. Після кожного раунду вона "
+            "рахує свою помилку і підлаштовує ваги — точно як при справжньому навчанні."
+        )
+        with st.expander("Що таке ваги?"):
+            st.markdown(
+                "Кожна ознака (вуса, гострі вуха, муркоче) має свою **вагу** — число, "
+                "яке показує, наскільки ця ознака важлива для рішення.\n\n"
+                "**Додатна вага** — ознака вказує на кота.\n\n"
+                "**Від'ємна вага** — ознака вказує на собаку.\n\n"
+                "**Нуль** — ознака поки нічого не значить.\n\n"
+                "Мережа множить кожну ознаку на її вагу, сумує, і отримує "
+                "впевненість: ближче до 100% — кіт, ближче до 0% — собака. "
+                "Якщо помилилась — ваги зсуваються в потрібний бік."
+            )
+
+    st.markdown("### Ознаки тварини:")
+    show_features(d)
+
+    st.markdown("---")
+    st.markdown("**Хто це?**")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.button("🐱 Кіт", use_container_width=True, on_click=do_guess, args=("cat",))
+    with col2:
+        st.button("🐶 Собака", use_container_width=True, on_click=do_guess, args=("dog",))
+
+    st.markdown("---")
+    st.markdown("**Поточні ваги мережі:**")
+    show_weights()
+
+
+# ── RESULT ──
+elif st.session_state.phase == "result":
+    rnd = st.session_state.round
+    r = st.session_state.round_result
+    d = r["d"]
+
     st.markdown(f"## {d['emoji']} Це {d['ua']}!")
     st.caption(f"Раунд {rnd + 1} / {len(DATA)}")
 
     col1, col2 = st.columns(2)
     with col1:
-        if user_correct:
+        if r["user_correct"]:
             st.success(f"**Ти:** вгадав ✓\n\n{st.session_state.user_score} / {rnd + 1}")
         else:
             st.error(f"**Ти:** помилка ✗\n\n{st.session_state.user_score} / {rnd + 1}")
     with col2:
-        if net_correct:
+        conf_pct = f"{r['confidence'] * 100:.0f}%"
+        if r["net_correct"]:
             st.success(
-                f"**Мережа:** {confidence * 100:.0f}% впевнена ✓\n\n{st.session_state.net_score} / {rnd + 1}"
+                f"**Мережа:** {conf_pct} впевнена ✓\n\n{st.session_state.net_score} / {rnd + 1}"
             )
         else:
             st.error(
-                f"**Мережа:** {confidence * 100:.0f}% впевнена ✗\n\n{st.session_state.net_score} / {rnd + 1}"
+                f"**Мережа:** {conf_pct} впевнена ✗\n\n{st.session_state.net_score} / {rnd + 1}"
             )
 
     st.markdown("**Оновлені ваги:**")
     show_weights()
 
     st.markdown("---")
-    if rnd + 1 < len(DATA):
-        if st.button("Далі →", use_container_width=True):
-            st.session_state.round += 1
-            st.session_state.phase = "guess"
-            st.rerun()
-    else:
-        if st.button("Результати →", use_container_width=True):
-            st.session_state.round += 1
-            st.session_state.phase = "done"
-            st.rerun()
+    label = "Далі →" if rnd + 1 < len(DATA) else "Результати →"
+    st.button(label, use_container_width=True, on_click=next_round)
 
 
+# ── DONE ──
 elif st.session_state.phase == "done":
     st.markdown("## 🎓 Навчання завершено!")
     st.markdown("")
@@ -180,6 +214,7 @@ elif st.session_state.phase == "done":
     st.markdown("**Фінальні ваги:**")
     show_weights()
 
+    w = st.session_state.weights
     st.markdown("")
     if w[0] > 0.3 and w[1] > 0.3:
         st.info("Мережа навчилась: вуса + гострі вуха = кіт!")
@@ -195,6 +230,4 @@ elif st.session_state.phase == "done":
         )
 
     st.markdown("")
-    if st.button("🔄 Зіграти ще раз", use_container_width=True):
-        init_state()
-        st.rerun()
+    st.button("🔄 Зіграти ще раз", use_container_width=True, on_click=init_state)
